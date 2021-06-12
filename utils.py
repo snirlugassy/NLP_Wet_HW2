@@ -108,7 +108,7 @@ class PosDataset(Dataset):
 
     @staticmethod
     def init_word_embeddings(word_dict):
-        glove = Vocab(Counter(word_dict), vectors="glove.6B.*d", specials=SPECIAL_TOKENS)
+        glove = Vocab(Counter(word_dict), vectors="glove.6B.300d", specials=SPECIAL_TOKENS)
         return glove.stoi, glove.itos, glove.vectors
 
     def get_word_embeddings(self):

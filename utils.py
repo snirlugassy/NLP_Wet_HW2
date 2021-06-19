@@ -84,7 +84,7 @@ class PosDataset(Dataset):
         self.datareader = PosDataReader(self.file, word_dict, pos_dict)
         self.vocab_size = len(self.datareader.word_dict)
         if word_embeddings:
-            self.word_idx_mappings, self.idx_word_mappings, self.word_vectors = word_embeddings
+            self.word_idx_mappings, self.idx_word_mappings, self.word_vectors = word_embeddings()
         else:
             self.word_idx_mappings, self.idx_word_mappings, self.word_vectors = self.init_word_embeddings(
                 self.datareader.word_dict)

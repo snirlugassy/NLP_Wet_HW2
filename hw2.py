@@ -15,7 +15,9 @@ from collections import Counter
 import matplotlib.pyplot as plt
 from chu_liu_edmonds import decode_mst
 
-from utils import get_vocabs, split, PosDataReader, PosDataset
+from utils import get_vocabs, split
+from pos_data_reader import PosDataReader
+from pos_dataset import PosDataset
 
 data_dir = os.getcwd()
 print("* Data directory - ", data_dir)
@@ -36,13 +38,12 @@ print("* Number of Train Tagged Sentences ", len(train))
 print("* Number of Test Tagged Sentences ",len(test))
 
 class DnnPosTagger(nn.Module):
-    def __init__(self, word_embeddings, hidden_dim, word_vocab_size, tag_vocab_size, word_embedding_dim):
+    def __init__(self, hidden_dim, word_vocab_size, tag_vocab_size, word_embedding_dim):
         super(DnnPosTagger, self).__init__()
-        emb_dim = word_embeddings.shape[1]
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.word_embedding = nn.Embedding(word_vocab_size, word_embedding_dim)
         # self.word_embedding = nn.Embedding.from_pretrained(word_embeddings, freeze=False)
-        self.lstm = nn.LSTM(input_size=emb_dim, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=False)
+        self.lstm = nn.LSTM(input_size=word_embedding_dim, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=False)
         self.hidden2tag = nn.Linear(hidden_dim*2, tag_vocab_size)
 
         
@@ -68,7 +69,7 @@ def evaluate():
         acc = acc / len(test)
     return acc
 
-#CUDA_LAUNCH_BLOCKING=1  
+# CUDA_LAUNCH_BLOCKING = 1
 
 EPOCHS = 15
 WORD_EMBEDDING_DIM = 100
@@ -76,7 +77,7 @@ HIDDEN_DIM = 1000
 word_vocab_size = len(train.word_idx_mappings)
 tag_vocab_size = len(train.pos_idx_mappings)
 
-model = DnnPosTagger(train_dataloader.dataset.word_vectors, HIDDEN_DIM, word_vocab_size, tag_vocab_size, WORD_EMBEDDING_DIM)
+model = DnnPosTagger(HIDDEN_DIM, word_vocab_size, tag_vocab_size, WORD_EMBEDDING_DIM)
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")

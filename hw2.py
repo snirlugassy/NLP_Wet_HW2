@@ -12,7 +12,7 @@ from torchtext.vocab import Vocab
 from torch.utils.data.dataset import Dataset, TensorDataset
 from pathlib import Path
 from collections import Counter
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from chu_liu_edmonds import decode_mst
 
 from utils import get_vocabs, split
@@ -134,17 +134,17 @@ for epoch in range(epochs):
 
 
 
-plt.plot(accuracy_list, c="red", label ="Accuracy")
-plt.xlabel("Epochs")
-plt.ylabel("Value")
-plt.legend()
-plt.show()
+# plt.plot(accuracy_list, c="red", label ="Accuracy")
+# plt.xlabel("Epochs")
+# plt.ylabel("Value")
+# plt.legend()
+# plt.show()
 
-plt.plot(loss_list, c="blue", label ="Loss")
-plt.xlabel("Epochs")
-plt.ylabel("Value")
-plt.legend()
-plt.show()
+# plt.plot(loss_list, c="blue", label ="Loss")
+# plt.xlabel("Epochs")
+# plt.ylabel("Value")
+# plt.legend()
+# plt.show()
 
 
 

@@ -15,20 +15,20 @@ SPECIAL_TOKENS = [PAD_TOKEN, UNKNOWN_TOKEN]
 
 
 class PosDataset(Dataset):
-    def __init__(self, word_counter, pos_counter, file: str,
+    def __init__(self, word_counts, pos_counts, file: str,
                  padding=False, word_embeddings=None):
         super().__init__()
         # self.subset = subset # One of the following: [train, test]
         self.data_reader = PosDataReader(file)
-        self.vocab_size = len(word_counter)
-        self.word_counter = word_counter
-        self.pos_counter = pos_counter
+        self.vocab_size = len(word_counts)
+        self.word_counts = word_counts
+        self.pos_counts = pos_counts
         if word_embeddings:
             self.word_idx_mappings, self.idx_word_mappings, self.word_vectors = word_embeddings()
         else:
             self.word_idx_mappings, self.idx_word_mappings, self.word_vectors = self.init_word_embeddings()
 
-        self.pos_idx_mappings, self.idx_pos_mappings = self.init_pos_vocab(pos_counter)
+        self.pos_idx_mappings, self.idx_pos_mappings = self.init_pos_vocab(pos_counts)
         self.pad_idx = self.word_idx_mappings.get(PAD_TOKEN)
         self.unknown_idx = self.word_idx_mappings.get(UNKNOWN_TOKEN)
         self.word_vector_dim = self.word_vectors.size(-1)
@@ -46,23 +46,23 @@ class PosDataset(Dataset):
         return word_embed_idx, pos_embed_idx, sentence_len
 
     def init_word_embeddings(self):
-        # glove = Vocab(Counter(word_counter), vectors="glove.6B.300d", specials=SPECIAL_TOKENS)
+        # glove = Vocab(Counter(word_counts), vectors="glove.6B.300d", specials=SPECIAL_TOKENS)
         # return glove.stoi, glove.itos, glove.vectors
-        words_sorted_by_count = sorted(self.word_counter.items(), key=lambda x: x[1], reverse=True)
-        ordered_word_counter_dict = OrderedDict(words_sorted_by_count)
-        vocab = torchtext.vocab.vocab(ordered_word_counter_dict, min_freq=1)
+        words_sorted_by_count = sorted(self.word_counts.items(), key=lambda x: x[1], reverse=True)
+        ordered_word_counts_dict = OrderedDict(words_sorted_by_count)
+        vocab = torchtext.vocab.vocab(ordered_word_counts_dict, min_freq=1)
         return vocab.stoi, vocab.itos, vocab.vectors
 
     def get_word_embeddings(self):
         return self.word_idx_mappings, self.idx_word_mappings, self.word_vectors
 
-    def init_pos_vocab(self, pos_counter):
+    def init_pos_vocab(self, pos_counts):
         idx_pos_mappings = sorted(
             [self.word_idx_mappings.get(token) for token in SPECIAL_TOKENS])
         pos_idx_mappings = {
             self.idx_word_mappings[idx]: idx for idx in idx_pos_mappings}
 
-        for i, pos in enumerate(sorted(pos_counter.keys())):
+        for i, pos in enumerate(sorted(pos_counts.keys())):
             # pos_idx_mappings[str(pos)] = int(i)
             pos_idx_mappings[str(pos)] = int(i+len(SPECIAL_TOKENS))
             idx_pos_mappings.append(str(pos))

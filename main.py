@@ -47,7 +47,7 @@ class ParsingDataset(Dataset):
         tokens_vector = self.vectorize_tokens([w[0] for w in s])
         pos_vector = self.vectorize_pos([w[1] for w in s])
         arcs = [(int(s[i][2]), i) for i in range(1, len(s))]
-        return (tokens_vector, pos_vector), arcs
+        return (tokens_vector, pos_vector), tensor(arcs)
 
 def extract_sentences(file_path):
     sentences = []
@@ -177,8 +177,9 @@ for epoch in range(EPOCHS):
     L = 0
     for i in range(len(train_dataset)):
         (tokens_vector, pos_vector), arcs = train_dataset[i]
-        tokens_vector.to(device)
-        pos_vector.to(device)
+        tokens_vector = tokens_vector.to(device)
+        pos_vector = pos_vector.to(device)
+        arc = arcs.to(device)
 
         # Reset gradients to zero
         model.zero_grad()

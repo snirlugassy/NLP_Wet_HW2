@@ -176,6 +176,7 @@ correct_predicted_edge = 0
 for epoch in range(EPOCHS):
     L = 0
     for i in range(len(train_dataset)):
+        print("Current sentence: ", i,"/",len(train_dataset))
         (tokens_vector, pos_vector), arcs = train_dataset[i]
         tokens_vector = tokens_vector.to(device)
         pos_vector = pos_vector.to(device)

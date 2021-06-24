@@ -9,6 +9,9 @@ Original file is located at
 
 # from google.colab import drive
 import torch
+from torch import nn, cuda, tensor, zeros, cat
+from torch.optim import Adam
+from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import torchtext
 from collections import defaultdict, OrderedDict
@@ -19,6 +22,32 @@ train_path = "train.labeled"
 test_path = "test.labeled"
 
 ROOT = "_R_"
+
+class ParsingDataset(Dataset):
+    def __init__(self, sentences, word_idx, pos_idx):
+        self.sentences = sentences
+        self.word_idx = word_idx
+        self.pos_idx = pos_idx
+
+    def vectorize_tokens(self, tokens):
+        idxs = [self.word_idx[w] for w in tokens]
+        return tensor([idxs])
+
+    def vectorize_pos(self, pos):
+        pos_vector = zeros((len(pos), len(self.pos_idx.keys())))
+        for i in range(len(pos)):
+            pos_vector[(i, self.pos_idx[pos[i]])] = 1
+        return pos_vector
+
+    def __len__(self):
+        return len(self.sentences)
+
+    def __getitem__(self, idx):
+        s = self.sentences[idx]
+        tokens_vector = self.vectorize_tokens([w[0] for w in s])
+        pos_vector = self.vectorize_pos([w[1] for w in s])
+        arcs = [(int(s[i][2]), i) for i in range(1, len(s))]
+        return (tokens_vector, pos_vector), arcs
 
 def extract_sentences(file_path):
     sentences = []
@@ -60,82 +89,119 @@ for s in test_sentences:
 word_count, pos_count = get_vocab(train_nohead + test_nohead)
 word_vocab_size, pos_vocab_size = len(word_count.keys()), len(pos_count.keys())
 
+# Set word id from vocab
 word_idx = dict()
 idx_word = dict()
-
 words_list = list(word_count.keys())
-
 for i in range(len(words_list)):
     w = words_list[i]
     word_idx[w] = i
     idx_word[i] = w
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# Set POS id from vocab
+pos_idx = dict()
+idx_pos = dict()
+pos_list = list(pos_count.keys())
+for i in range(len(pos_list)):
+    pos = pos_list[i]
+    pos_idx[pos] = i
+    idx_pos[i] = pos
 
-class DependencyParsingNetwork(torch.nn.Module):
-    def __init__(self, hidden_dim, word_vocab_size, pos_vocab_size, word_embedding_dim):
+
+class DependencyParsingNetwork(nn.Module):
+    def __init__(self, hidden_dim, word_vocab_size, word_embedding_dim, pos_vocab_size):
         super(DependencyParsingNetwork, self).__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.word_embedding = torch.nn.Embedding(word_vocab_size, word_embedding_dim)
-        self.lstm = torch.nn.LSTM(input_size=word_embedding_dim, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=False)
-        self.mlp = torch.nn.Linear(2 * 2 * HIDDEN_DIM, 1, bias=True)
-        self.tanh = torch.nn.Tanh()
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.word_embedding = nn.Embedding(word_vocab_size, word_embedding_dim)
+        # TODO: add dropout arg to lstm
+        self.lstm = nn.LSTM(input_size=word_embedding_dim + pos_vocab_size, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=True)
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * 2 * HIDDEN_DIM, 1),
+            nn.Tanh()
+        )
+        # self.mlp = nn.Linear(2 * 2 * HIDDEN_DIM, 1)
+        # self.tanh = nn.Tanh()
 
-    def forward(self, word_idx):
-        x = self.word_embedding(word_idx)
-        x = torch.tensor(x, requires_grad=True)
+    def forward(self, token_vector, pos_vector):
+        x = cat((self.word_embedding(token_vector).squeeze(0), pos_vector) , dim=1)
+        x = x.unsqueeze(0)
         x, (hn, cn) = self.lstm(x)
         x = x.squeeze(0)
-        output = torch.zeros(x.shape[0], x.shape[0])
-        for i, j in combinations(range(len(x)), 2):
-            output[i][j] = self.tanh(self.mlp(torch.cat((x[i],x[j]))))
-        # for i in range(len(x.split(1))):
-        #     for j in range(len(x.split(1))):
+        output = zeros(x.shape[0], x.shape[0])
+        for _i, _j in combinations(range(len(x)), 2):
+            output[_i][_j] = self.tanh(self.mlp(cat((x[_i],x[_j]))))
+        # for i in range(x.shape[0]):
+        #     for j in range(x.shape[0]):
         #         if i != j:
-        #             x_i = x.split(1)[i].reshape(-1)
-        #             x_j = x.split(1)[j].reshape(-1)
-        #             output[i][j] = self.tanh(self.mlp(torch.cat((x_i,x_j))))
+        #             x_i = x[i]
+        #             x_j = x[j]
+        #             output[i][j] = self.tanh(self.mlp(cat((x_i,x_j))))
         return output
 
 
-def vectorize_sentence(sentence, to_idx):
-    idxs = [to_idx[w] for w in sentence]
-    return torch.tensor([idxs])
+def vectorize_tokens(tokens, to_idx):
+    idxs = [to_idx[w] for w in tokens]
+    return tensor([idxs])
+
+
+def vectorize_pos(pos, to_idx):
+    pos_vector = zeros((len(pos), len(to_idx.keys())))
+    for i in range(len(pos)):
+        pos_vector[(i, to_idx[pos[i]])] = 1
+    return pos_vector
 
 
 # def loss(ground_truth, output):
-HIDDEN_DIM = 2
-WORD_EMBEDDING_DIM = 3
-EPOCHS = 5
+HIDDEN_DIM = 50
+WORD_EMBEDDING_DIM = 300
+EPOCHS = 10
 
-model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, pos_vocab_size, WORD_EMBEDDING_DIM).to(device)
 
-# loss = torch.nn.NLLLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-log_softmax = torch.nn.LogSoftmax(1)
+train_dataset = ParsingDataset(train_sentences, word_idx, pos_idx)
+
+device = 'cuda' if cuda.is_available() else 'cpu'
+print("Device = ", device)
+
+model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, WORD_EMBEDDING_DIM,  pos_vocab_size).to(device)
+
+# loss = nn.NLLLoss()
+optimizer = Adam(model.parameters(), lr=0.5)
+log_softmax = nn.LogSoftmax(dim=1)
 
 edge_count = 0
 correct_predicted_edge = 0
 
+
 for epoch in range(EPOCHS):
-    for sentence in train_sentences:
-        s = vectorize_sentence([_y[0] for _y in sentence], word_idx)
-        s_len = len(sentence)
-        arcs = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
-        x = model.forward(s)
+    L = 0
+    for i in range(len(train_dataset)):
+        (tokens_vector, pos_vector), arcs = train_dataset[i]
+
+        # Reset gradients to zero
+        model.zero_grad()
+
+        # Forward
+        x = model(tokens_vector, pos_vector)
+
+        # Calculate scores for every possible arc
         y = torch.zeros_like(x)
         for (h,m) in arcs:
             y[h][m] = -log_softmax(x)[h][m]
         # y = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
+
+        # Calculate loss
         loss = torch.sum(y)
-        model.zero_grad()
+        L += float(loss)
+
+        # Backpropagation
         loss.backward()
         optimizer.step()
 
-        mst, _ = decode_mst(x.detach().numpy(), s_len, has_labels=False)
-        true_mst = np.array([int(ss[2]) for ss in sentence])
-
-        edge_count += s_len - 1
-        correct_predicted_edge += sum(mst == true_mst) - 1
-    print("Epoch = " , epoch , "/", EPOCHS)
-    print("Accuracy = ", correct_predicted_edge / edge_count)
+        # mst, _ = decode_mst(x.detach().numpy(), s_len, has_labels=False)
+        # true_mst = np.array([int(ss[2]) for ss in sentence])
+        #
+        # edge_count += s_len - 1
+        # correct_predicted_edge += sum(mst == true_mst) - 1
+    print("Epoch = ", epoch, "/", EPOCHS)
+    print("Loss = ", L)
+    # print("Accuracy = ", correct_predicted_edge / edge_count)

@@ -162,7 +162,8 @@ train_dataset = ParsingDataset(train_sentences, word_idx, pos_idx)
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
 
-model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, WORD_EMBEDDING_DIM,  pos_vocab_size).to(device)
+model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, WORD_EMBEDDING_DIM,  pos_vocab_size)
+model = model.to(device)
 
 # loss = nn.NLLLoss()
 optimizer = Adam(model.parameters(), lr=0.5)
@@ -176,6 +177,8 @@ for epoch in range(EPOCHS):
     L = 0
     for i in range(len(train_dataset)):
         (tokens_vector, pos_vector), arcs = train_dataset[i]
+        tokens_vector.to(device)
+        pos_vector.to(device)
 
         # Reset gradients to zero
         model.zero_grad()

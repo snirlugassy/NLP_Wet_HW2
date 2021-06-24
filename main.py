@@ -129,7 +129,7 @@ class DependencyParsingNetwork(nn.Module):
         x = x.squeeze(0)
         output = zeros(x.shape[0], x.shape[0])
         for _i, _j in combinations(range(len(x)), 2):
-            output[_i][_j] = self.tanh(self.mlp(cat((x[_i],x[_j]))))
+            output[_i][_j] = self.mlp(cat((x[_i],x[_j])))
         # for i in range(x.shape[0]):
         #     for j in range(x.shape[0]):
         #         if i != j:

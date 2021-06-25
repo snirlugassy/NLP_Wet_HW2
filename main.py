@@ -158,11 +158,11 @@ def vectorize_pos(pos, to_idx):
     return pos_vector
 
 
-HIDDEN_DIM = 50
+HIDDEN_DIM = 100
 WORD_EMBEDDING_DIM = 300
-EPOCHS = 1
+EPOCHS = 100
 GRAD_STEPS = 10
-TRIM_TRAIN_DATASET = 20
+TRIM_TRAIN_DATASET = 0
 
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], word_idx, pos_idx)

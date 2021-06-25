@@ -12,16 +12,19 @@ import torch
 from torch import nn, cuda, tensor, zeros, cat
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
+import torch.nn.functional as F
 import numpy as np
 import torchtext
 from collections import defaultdict, OrderedDict
 from itertools import combinations
 from chu_liu_edmonds import decode_mst
+from datetime import datetime
 
 train_path = "train.labeled"
 test_path = "test.labeled"
 
 ROOT = "_R_"
+
 
 class ParsingDataset(Dataset):
     def __init__(self, sentences, word_idx, pos_idx):
@@ -46,20 +49,21 @@ class ParsingDataset(Dataset):
         s = self.sentences[idx]
         tokens_vector = self.vectorize_tokens([w[0] for w in s])
         pos_vector = self.vectorize_pos([w[1] for w in s])
-        arcs = [(int(s[i][2]), i) for i in range(1, len(s))]
+        # arcs = [(int(s[i][2]), i) for i in range(len(s))]
+        arcs = [int(s[i][2]) for i in range(len(s))]
         return (tokens_vector, pos_vector), tensor(arcs)
 
 def extract_sentences(file_path):
     sentences = []
     with open(file_path, 'r') as f:
-        cur_sentence = [(ROOT, ROOT, -1)]
+        cur_sentence = [(ROOT, ROOT, 0)]
         for line in f:
             if line != '\n':
                 splitted = line.split('\t')
                 cur_sentence.append((splitted[1], splitted[3], splitted[6]))
             else:
                 sentences.append(cur_sentence)
-                cur_sentence = [(ROOT, ROOT, -1)]
+                cur_sentence = [(ROOT, ROOT, 0)]
     return sentences
 
 
@@ -116,9 +120,11 @@ class DependencyParsingNetwork(nn.Module):
         # TODO: add dropout arg to lstm
         self.lstm = nn.LSTM(input_size=word_embedding_dim + pos_vocab_size, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=True)
         self.mlp = nn.Sequential(
+            nn.ReLU(),
             nn.Linear(2 * 2 * HIDDEN_DIM, 1),
             nn.Tanh()
         )
+        self.log_softmax = nn.LogSoftmax(dim=1)
         # self.mlp = nn.Linear(2 * 2 * HIDDEN_DIM, 1)
         # self.tanh = nn.Tanh()
 
@@ -127,16 +133,17 @@ class DependencyParsingNetwork(nn.Module):
         x = x.unsqueeze(0)
         x, (hn, cn) = self.lstm(x)
         x = x.squeeze(0)
-        output = zeros(x.shape[0], x.shape[0])
+        scores = zeros(x.shape[0], x.shape[0])
         for _i, _j in combinations(range(len(x)), 2):
-            output[_i][_j] = self.mlp(cat((x[_i],x[_j])))
+            scores[_i][_j] = self.mlp(cat((x[_i],x[_j])))
         # for i in range(x.shape[0]):
         #     for j in range(x.shape[0]):
         #         if i != j:
         #             x_i = x[i]
         #             x_j = x[j]
         #             output[i][j] = self.tanh(self.mlp(cat((x_i,x_j))))
-        return output
+        scores = self.log_softmax(scores)
+        return scores
 
 
 def vectorize_tokens(tokens, to_idx):
@@ -151,13 +158,16 @@ def vectorize_pos(pos, to_idx):
     return pos_vector
 
 
-# def loss(ground_truth, output):
 HIDDEN_DIM = 50
 WORD_EMBEDDING_DIM = 300
-EPOCHS = 10
+EPOCHS = 1
+GRAD_STEPS = 10
+TRIM_TRAIN_DATASET = 20
 
-
-train_dataset = ParsingDataset(train_sentences, word_idx, pos_idx)
+if TRIM_TRAIN_DATASET > 0:
+    train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], word_idx, pos_idx)
+else:
+    train_dataset = ParsingDataset(train_sentences, word_idx, pos_idx)
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
@@ -166,47 +176,54 @@ model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, WORD_EMBEDDING_DIM
 model = model.to(device)
 
 # loss = nn.NLLLoss()
-optimizer = Adam(model.parameters(), lr=0.5)
+optimizer = Adam(model.parameters(), lr=0.01)
+loss_function = nn.NLLLoss()
 log_softmax = nn.LogSoftmax(dim=1)
 
 edge_count = 0
 correct_predicted_edge = 0
 
+if __name__ == "__main__":
+    for epoch in range(EPOCHS):
+        L = 0
+        for i in range(len(train_dataset)):
+            # print("Current sentence: ", i,"/",len(train_dataset))
+            (tokens_vector, pos_vector), arcs = train_dataset[i]
+            tokens_vector = tokens_vector.to(device)
+            pos_vector = pos_vector.to(device)
+            arc = arcs.to(device)
 
-for epoch in range(EPOCHS):
-    L = 0
-    for i in range(len(train_dataset)):
-        print("Current sentence: ", i,"/",len(train_dataset))
-        (tokens_vector, pos_vector), arcs = train_dataset[i]
-        tokens_vector = tokens_vector.to(device)
-        pos_vector = pos_vector.to(device)
-        arc = arcs.to(device)
+            # Forward
+            scores = model(tokens_vector, pos_vector)
 
-        # Reset gradients to zero
-        model.zero_grad()
+            # Calculate scores for every possible arc
+            # y = torch.zeros_like(x)
+            # for (h,m) in arcs:
+            #     y[h][m] = -log_softmax(x)[h][m]
 
-        # Forward
-        x = model(tokens_vector, pos_vector)
+            loss = loss_function(scores, arcs)
 
-        # Calculate scores for every possible arc
-        y = torch.zeros_like(x)
-        for (h,m) in arcs:
-            y[h][m] = -log_softmax(x)[h][m]
-        # y = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
+            # y = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
 
-        # Calculate loss
-        loss = torch.sum(y)
-        L += float(loss)
+            # Calculate loss
+            # loss = torch.sum(y)
+            L += float(loss)
 
-        # Backpropagation
-        loss.backward()
-        optimizer.step()
+            # Backpropagation
+            loss.backward()
 
-        # mst, _ = decode_mst(x.detach().numpy(), s_len, has_labels=False)
-        # true_mst = np.array([int(ss[2]) for ss in sentence])
-        #
-        # edge_count += s_len - 1
-        # correct_predicted_edge += sum(mst == true_mst) - 1
-    print("Epoch = ", epoch, "/", EPOCHS)
-    print("Loss = ", L)
-    # print("Accuracy = ", correct_predicted_edge / edge_count)
+            if i % GRAD_STEPS == 0:
+                optimizer.step()
+                model.zero_grad()
+
+            # mst, _ = decode_mst(x.detach().numpy(), s_len, has_labels=False)
+            # true_mst = np.array([int(ss[2]) for ss in sentence])
+            #
+            # edge_count += s_len - 1
+            # correct_predicted_edge += sum(mst == true_mst) - 1
+        print("Epoch = ", epoch, "/", EPOCHS)
+        print("Loss = ", L)
+        # print("Accuracy = ", correct_predicted_edge / edge_count)
+
+    saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
+    torch.save(model, saved_model_file_name)

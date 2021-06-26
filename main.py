@@ -224,7 +224,7 @@ if __name__ == "__main__":
             # for (h,m) in arcs:
             #     y[h][m] = -log_softmax(x)[h][m]
 
-            loss = loss_function(scores, arcs)
+            loss = loss_function(scores[1:,], arcs[1:])
 
             # y = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
 

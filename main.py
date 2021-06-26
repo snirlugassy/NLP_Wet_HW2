@@ -137,18 +137,17 @@ for s in test_sentences:
 
 
 class DependencyParsingNetwork(nn.Module):
-    def __init__(self, hidden_dim, word_vocab_size, word_embedding_dim, pos_vocab_size, output="prob"):
+    def __init__(self, hidden_dim, word_vocab_size, word_embedding_dim, pos_vocab_size):
         super(DependencyParsingNetwork, self).__init__()
-        self.word_embedding = nn.Embedding(word_vocab_size, word_embedding_dim)
+        self.word_embedding = nn.Embedding(word_vocab_size, word_embedding_dim, padding_idx=0, max_norm=1)
         # TODO: add dropout arg to lstm
         self.lstm = nn.LSTM(input_size=word_embedding_dim + pos_vocab_size, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=True)
         self.mlp = nn.Sequential(
-            nn.ReLU(),
             nn.Linear(2 * 2 * HIDDEN_DIM, 1),
-            nn.Tanh()
+            nn.Tanh(),
+            # nn.Linear(100, 1),
         )
-        self.log_softmax = nn.LogSoftmax(dim=1)
-        self.output = output
+        self.log_softmax = nn.LogSoftmax(dim=0)
 
     def forward(self, token_vector, pos_vector):
         x = cat((self.word_embedding(token_vector).squeeze(0), pos_vector) , dim=1)
@@ -158,15 +157,8 @@ class DependencyParsingNetwork(nn.Module):
         scores = zeros(x.shape[0], x.shape[0])
         for _i, _j in combinations(range(len(x)), 2):
             scores[_i][_j] = self.mlp(cat((x[_i],x[_j])))
-        # for i in range(x.shape[0]):
-        #     for j in range(x.shape[0]):
-        #         if i != j:
-        #             x_i = x[i]
-        #             x_j = x[j]
-        #             output[i][j] = self.tanh(self.mlp(cat((x_i,x_j))))
-        # if self.output == "prob":
-        scores = self.log_softmax(scores)
-        return scores
+        _scores = self.log_softmax(scores)
+        return scores, _scores
 
 
 def vectorize_tokens(tokens, to_idx):
@@ -181,16 +173,20 @@ def vectorize_pos(pos, to_idx):
     return pos_vector
 
 
-HIDDEN_DIM = 70
-WORD_EMBEDDING_DIM = 200
-EPOCHS = 10
-GRAD_STEPS = 10
-TRIM_TRAIN_DATASET = 0
+HIDDEN_DIM = 250
+WORD_EMBEDDING_DIM = 1000
+EPOCHS = 1000
+GRAD_STEPS = 5
+TRIM_TRAIN_DATASET = 20
+BATCH_SIZE = 10
+LEARNING_RATE = 0.01
 
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET])
 else:
     train_dataset = ParsingDataset(train_sentences)
+
+data_loader = DataLoader(train_dataset, batch_size=100, shuffle=True)
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
@@ -199,7 +195,7 @@ model = DependencyParsingNetwork(HIDDEN_DIM, train_dataset.word_vocab_size, WORD
 model = model.to(device)
 
 # loss = nn.NLLLoss()
-optimizer = Adam(model.parameters(), lr=0.01)
+optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 loss_function = nn.NLLLoss()
 log_softmax = nn.LogSoftmax(dim=1)
 
@@ -209,33 +205,27 @@ if __name__ == "__main__":
         L = 0
         edges_count = 0
         correct_edges_count = 0
-        for i in range(len(train_dataset)):
-            # print("Current sentence: ", i,"/",len(train_dataset))
+        random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
+        _i = -1
+        for i in random_batch_idx:
+            _i += 1
             (tokens_vector, pos_vector), arcs = train_dataset[i]
             tokens_vector = tokens_vector.to(device)
             pos_vector = pos_vector.to(device)
             arc = arcs.to(device)
 
             # Forward
-            scores = model(tokens_vector, pos_vector)
+            scores, log_softmax_scores = model(tokens_vector, pos_vector)
 
-            # Calculate scores for every possible arc
-            # y = torch.zeros_like(x)
-            # for (h,m) in arcs:
-            #     y[h][m] = -log_softmax(x)[h][m]
+            loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
+            # loss = loss_function(scores[1:,], arcs[1:])
 
-            loss = loss_function(scores[1:,], arcs[1:])
-
-            # y = [( int(sentence[i][2]), i ) for i in range(1,len(sentence))]
-
-            # Calculate loss
-            # loss = torch.sum(y)
-            L += float(loss)
+            L += loss
 
             # Backpropagation
             loss.backward()
 
-            if i % GRAD_STEPS == 0:
+            if _i % GRAD_STEPS == 0:
                 optimizer.step()
                 model.zero_grad()
 
@@ -249,15 +239,14 @@ if __name__ == "__main__":
         print("Epoch = ", epoch, "/", EPOCHS)
         print("Loss = ", L)
         print("Accuracy = ", accuracy)
-        # print("Accuracy = ", correct_predicted_edge / edge_count)
 
-    saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-    torch.save(model, saved_model_file_name)
-
-    # Email notification
-    msg = """
-    Current loss = {} <br/>
-    Accuracy = ??? <br/>
-    Model parameters saved to {} <br/>
-    """.format(str(L), saved_model_file_name)
-    send_email("NLP HW2 Run finished", msg)
+    # saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
+    # torch.save(model, saved_model_file_name)
+    #
+    # # Email notification
+    # msg = """
+    # Current loss = {} <br/>
+    # Accuracy = ??? <br/>
+    # Model parameters saved to {} <br/>
+    # """.format(str(L), saved_model_file_name)
+    # send_email("NLP HW2 Run finished", msg)

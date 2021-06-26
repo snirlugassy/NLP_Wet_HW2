@@ -20,17 +20,50 @@ from itertools import combinations
 from chu_liu_edmonds import decode_mst
 from datetime import datetime
 
+from send_email import send_email
+
 train_path = "train.labeled"
 test_path = "test.labeled"
 
 ROOT = "_R_"
 
 
+def get_vocab(sentences):
+    word_dict = defaultdict(int)
+    pos_dict = defaultdict(int)
+    for sentence in sentences:
+        for i in range(len(sentence)):
+            word, pos = sentence[i][0], sentence[i][1]
+            word_dict[word] += 1
+            pos_dict[pos] += 1
+    return word_dict, pos_dict
+
+
 class ParsingDataset(Dataset):
-    def __init__(self, sentences, word_idx, pos_idx):
+    def __init__(self, sentences):
         self.sentences = sentences
-        self.word_idx = word_idx
-        self.pos_idx = pos_idx
+
+        self.word_count, self.pos_count = get_vocab(train_nohead + test_nohead)
+
+        # Set word id from vocab
+        self.word_idx = dict()
+        self.idx_word = dict()
+        self.words_list = list(self.word_count.keys())
+        for i in range(len(self.words_list)):
+            w = self.words_list[i]
+            self.word_idx[w] = i
+            self.idx_word[i] = w
+
+        # Set POS id from vocab
+        self.pos_idx = dict()
+        self.idx_pos = dict()
+        self.pos_list = list(self.pos_count.keys())
+        for i in range(len(self.pos_list)):
+            pos = self.pos_list[i]
+            self.pos_idx[pos] = i
+            self.idx_pos[i] = pos
+
+        self.word_vocab_size, self.pos_vocab_size = len(self.words_list), len(self.pos_list)
 
     def vectorize_tokens(self, tokens):
         idxs = [self.word_idx[w] for w in tokens]
@@ -67,15 +100,6 @@ def extract_sentences(file_path):
     return sentences
 
 
-def get_vocab(sentences):
-    word_dict = defaultdict(int)
-    pos_dict = defaultdict(int)
-    for sentence in sentences:
-        for word, pos in sentence:
-            word_dict[word] += 1
-            pos_dict[pos] += 1
-    return word_dict, pos_dict
-
 
 train_sentences = extract_sentences(train_path)
 test_sentences = extract_sentences(test_path)
@@ -90,32 +114,31 @@ for s in test_sentences:
     _s = [(x[0], x[1]) for x in s]
     test_nohead.append(_s)
 
-word_count, pos_count = get_vocab(train_nohead + test_nohead)
-word_vocab_size, pos_vocab_size = len(word_count.keys()), len(pos_count.keys())
-
-# Set word id from vocab
-word_idx = dict()
-idx_word = dict()
-words_list = list(word_count.keys())
-for i in range(len(words_list)):
-    w = words_list[i]
-    word_idx[w] = i
-    idx_word[i] = w
-
-# Set POS id from vocab
-pos_idx = dict()
-idx_pos = dict()
-pos_list = list(pos_count.keys())
-for i in range(len(pos_list)):
-    pos = pos_list[i]
-    pos_idx[pos] = i
-    idx_pos[i] = pos
+# word_count, pos_count = get_vocab(train_nohead + test_nohead)
+# word_vocab_size, pos_vocab_size = len(word_count.keys()), len(pos_count.keys())
+#
+# # Set word id from vocab
+# word_idx = dict()
+# idx_word = dict()
+# words_list = list(word_count.keys())
+# for i in range(len(words_list)):
+#     w = words_list[i]
+#     word_idx[w] = i
+#     idx_word[i] = w
+#
+# # Set POS id from vocab
+# pos_idx = dict()
+# idx_pos = dict()
+# pos_list = list(pos_count.keys())
+# for i in range(len(pos_list)):
+#     pos = pos_list[i]
+#     pos_idx[pos] = i
+#     idx_pos[i] = pos
 
 
 class DependencyParsingNetwork(nn.Module):
-    def __init__(self, hidden_dim, word_vocab_size, word_embedding_dim, pos_vocab_size):
+    def __init__(self, hidden_dim, word_vocab_size, word_embedding_dim, pos_vocab_size, output="prob"):
         super(DependencyParsingNetwork, self).__init__()
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.word_embedding = nn.Embedding(word_vocab_size, word_embedding_dim)
         # TODO: add dropout arg to lstm
         self.lstm = nn.LSTM(input_size=word_embedding_dim + pos_vocab_size, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=True)
@@ -125,8 +148,7 @@ class DependencyParsingNetwork(nn.Module):
             nn.Tanh()
         )
         self.log_softmax = nn.LogSoftmax(dim=1)
-        # self.mlp = nn.Linear(2 * 2 * HIDDEN_DIM, 1)
-        # self.tanh = nn.Tanh()
+        self.output = output
 
     def forward(self, token_vector, pos_vector):
         x = cat((self.word_embedding(token_vector).squeeze(0), pos_vector) , dim=1)
@@ -142,6 +164,7 @@ class DependencyParsingNetwork(nn.Module):
         #             x_i = x[i]
         #             x_j = x[j]
         #             output[i][j] = self.tanh(self.mlp(cat((x_i,x_j))))
+        # if self.output == "prob":
         scores = self.log_softmax(scores)
         return scores
 
@@ -160,19 +183,19 @@ def vectorize_pos(pos, to_idx):
 
 HIDDEN_DIM = 100
 WORD_EMBEDDING_DIM = 300
-EPOCHS = 100
+EPOCHS = 10
 GRAD_STEPS = 10
 TRIM_TRAIN_DATASET = 0
 
 if TRIM_TRAIN_DATASET > 0:
-    train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], word_idx, pos_idx)
+    train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET])
 else:
-    train_dataset = ParsingDataset(train_sentences, word_idx, pos_idx)
+    train_dataset = ParsingDataset(train_sentences)
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
 
-model = DependencyParsingNetwork(HIDDEN_DIM, word_vocab_size, WORD_EMBEDDING_DIM,  pos_vocab_size)
+model = DependencyParsingNetwork(HIDDEN_DIM, train_dataset.word_vocab_size, WORD_EMBEDDING_DIM,  train_dataset.pos_vocab_size)
 model = model.to(device)
 
 # loss = nn.NLLLoss()
@@ -225,5 +248,13 @@ if __name__ == "__main__":
         print("Loss = ", L)
         # print("Accuracy = ", correct_predicted_edge / edge_count)
 
-    saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-    torch.save(model, saved_model_file_name)
+    # saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
+    # torch.save(model, saved_model_file_name)
+    #
+    # # Email notification
+    # msg = """
+    # Current loss = {} <br/>
+    # Accuracy = ??? <br/>
+    # Model parameters saved to {} <br/>
+    # """.format(str(L), saved_model_file_name)
+    # send_email("NLP HW2 Run finished", msg)

@@ -89,14 +89,14 @@ class ParsingDataset(Dataset):
 def extract_sentences(file_path):
     sentences = []
     with open(file_path, 'r') as f:
-        cur_sentence = [(ROOT, ROOT, 0)]
+        cur_sentence = [(ROOT, ROOT, -1)]
         for line in f:
             if line != '\n':
                 splitted = line.split('\t')
                 cur_sentence.append((splitted[1], splitted[3], splitted[6]))
             else:
                 sentences.append(cur_sentence)
-                cur_sentence = [(ROOT, ROOT, 0)]
+                cur_sentence = [(ROOT, ROOT, -1)]
     return sentences
 
 
@@ -181,8 +181,8 @@ def vectorize_pos(pos, to_idx):
     return pos_vector
 
 
-HIDDEN_DIM = 100
-WORD_EMBEDDING_DIM = 300
+HIDDEN_DIM = 70
+WORD_EMBEDDING_DIM = 200
 EPOCHS = 10
 GRAD_STEPS = 10
 TRIM_TRAIN_DATASET = 0
@@ -203,12 +203,12 @@ optimizer = Adam(model.parameters(), lr=0.01)
 loss_function = nn.NLLLoss()
 log_softmax = nn.LogSoftmax(dim=1)
 
-edge_count = 0
-correct_predicted_edge = 0
 
 if __name__ == "__main__":
     for epoch in range(EPOCHS):
         L = 0
+        edges_count = 0
+        correct_edges_count = 0
         for i in range(len(train_dataset)):
             # print("Current sentence: ", i,"/",len(train_dataset))
             (tokens_vector, pos_vector), arcs = train_dataset[i]
@@ -239,22 +239,25 @@ if __name__ == "__main__":
                 optimizer.step()
                 model.zero_grad()
 
-            # mst, _ = decode_mst(x.detach().numpy(), s_len, has_labels=False)
-            # true_mst = np.array([int(ss[2]) for ss in sentence])
-            #
-            # edge_count += s_len - 1
-            # correct_predicted_edge += sum(mst == true_mst) - 1
+            mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+
+            edges_count += scores.shape[0]
+            correct_edges_count += sum(np.equal(mst, arcs))
+
+        accuracy = correct_edges_count / edges_count
+
         print("Epoch = ", epoch, "/", EPOCHS)
         print("Loss = ", L)
+        print("Accuracy = ", accuracy)
         # print("Accuracy = ", correct_predicted_edge / edge_count)
 
-    # saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-    # torch.save(model, saved_model_file_name)
-    #
-    # # Email notification
-    # msg = """
-    # Current loss = {} <br/>
-    # Accuracy = ??? <br/>
-    # Model parameters saved to {} <br/>
-    # """.format(str(L), saved_model_file_name)
-    # send_email("NLP HW2 Run finished", msg)
+    saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
+    torch.save(model, saved_model_file_name)
+
+    # Email notification
+    msg = """
+    Current loss = {} <br/>
+    Accuracy = ??? <br/>
+    Model parameters saved to {} <br/>
+    """.format(str(L), saved_model_file_name)
+    send_email("NLP HW2 Run finished", msg)

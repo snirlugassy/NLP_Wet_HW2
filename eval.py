@@ -12,9 +12,12 @@ from collections import defaultdict, OrderedDict
 from itertools import combinations
 from chu_liu_edmonds import decode_mst
 from datetime import datetime
-from main import extract_sentences, get_vocab, ParsingDataset
+from main import extract_sentences, get_vocab, ParsingDataset, DependencyParsingNetwork
 from send_email import send_email
 
+
+edges_count = 0
+correct_edges_count = 0
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -22,12 +25,12 @@ if __name__ == "__main__":
     else:
         print("Missing model file name!")
         # model_file = input("Enter model file name:")
-        model_file = "21-06-25_20-51.model"
+        model_file = "21-06-25_20-55.model"
 
     device = 'cuda' if cuda.is_available() else 'cpu'
     print("Device = ", device)
 
-    model = torch.load(model_file).to(device)
+    model = torch.load(model_file, map_location=device)
 
     train_path = "train.labeled"
 
@@ -43,12 +46,20 @@ if __name__ == "__main__":
         (tokens_vector, pos_vector), arcs = train_dataset[i]
         tokens_vector = tokens_vector.to(device)
         pos_vector = pos_vector.to(device)
-        arc = arcs.to(device)
+        arcs = arcs.to(device)
         scores = model(tokens_vector, pos_vector)
-        loss = loss_function(scores, arcs)
+        # loss = loss_function(scores, arcs)
+        loss = loss_function(scores[1:,], arcs[1:])
         L += loss
-        mst, _ = decode_mst(scores.detach().numpy(), len(tokens_vector), has_labels=False)
-        # true_mst = np.array([int(ss[2]) for ss in sentence])
 
-        # edge_count += s_len - 1
-        # correct_predicted_edge += sum(mst == true_mst) - 1
+        # _scores = np.zeros(scores.shape)
+        # for i in range(1, len(arcs)):
+        #     _scores[arcs[i]][i] = 100
+
+        mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+
+        edges_count += scores.shape[0]
+        correct_edges_count += sum(np.equal(mst, arcs))
+
+    accuracy = correct_edges_count / edges_count
+    print("Accuracy = ", accuracy)

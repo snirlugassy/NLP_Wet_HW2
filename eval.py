@@ -25,7 +25,7 @@ if __name__ == "__main__":
     else:
         print("Missing model file name!")
         # model_file = input("Enter model file name:")
-        model_file = "21-06-25_20-55.model"
+        model_file = "21-06-27_14-35.model"
 
     device = 'cuda' if cuda.is_available() else 'cpu'
     print("Device = ", device)
@@ -47,17 +47,10 @@ if __name__ == "__main__":
         tokens_vector = tokens_vector.to(device)
         pos_vector = pos_vector.to(device)
         arcs = arcs.to(device)
-        scores = model(tokens_vector, pos_vector)
-        # loss = loss_function(scores, arcs)
-        loss = loss_function(scores[1:,], arcs[1:])
+        scores, log_softmax_scores = model(tokens_vector, pos_vector)
+        loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
         L += loss
-
-        # _scores = np.zeros(scores.shape)
-        # for i in range(1, len(arcs)):
-        #     _scores[arcs[i]][i] = 100
-
         mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
-
         edges_count += scores.shape[0]
         correct_edges_count += sum(np.equal(mst, arcs))
 

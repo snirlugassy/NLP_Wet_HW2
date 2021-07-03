@@ -109,7 +109,7 @@ test_sentences = extract_sentences(test_path)
 
 sentences = train_sentences + test_sentences
 
-TRIM_TRAIN_DATASET = 1000
+TRIM_TRAIN_DATASET = 0
 
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], sentences)
@@ -118,66 +118,64 @@ else:
 
 test_dataset = ParsingDataset(test_sentences, sentences)
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
+#
+# arc_lengths = list()
+# for i in range(len(train_dataset)):
+#     _, arcs = train_dataset[i]
+#     for j in range(len(arcs)):
+#         arc_lengths.append(int(abs(j-arcs[j])))
+#
+#
+# plt.figure(figsize=(10,10))
+# plt.title("Distance between head and modifier histogram")
+# plt.xlabel("Distance")
+# plt.ylabel("Number of pairs")
+# plt.hist(arc_lengths, bins=max(arc_lengths))
+# plt.xlim(0, 10)
+# plt.show()
+#
+# import matplotlib.pyplot as plt
+#
+# arcs2d = list()
+# for i in range(len(train_dataset)):
+#     _, arcs = train_dataset[i]
+#     for j in range(len(arcs)):
+#         arcs2d.append((arcs[j], j))
+#
+#
+# plt.figure(figsize=(10,10))
+# plt.title("Head-modifier pairs scatter plot")
+# plt.xlabel("Head index")
+# plt.ylabel("Modifier index")
+# plt.scatter(*zip(*arcs2d), )
+# plt.show()
 
-arc_lengths = list()
-for i in range(len(train_dataset)):
-    _, arcs = train_dataset[i]
-    for j in range(len(arcs)):
-        arc_lengths.append(int(abs(j-arcs[j])))
+LSTM_HIDDEN_DIM = 150
+WORD_EMBEDDING_DIM = 300
+POS_EMBEDDING_DIM = 20
 
-
-plt.figure(figsize=(10,10))
-plt.title("Distance between head and modifier histogram")
-plt.xlabel("Distance")
-plt.ylabel("Number of pairs")
-plt.hist(arc_lengths, bins=max(arc_lengths))
-plt.xlim(0, 10)
-plt.show()
-
-import matplotlib.pyplot as plt
-
-arcs2d = list()
-for i in range(len(train_dataset)):
-    _, arcs = train_dataset[i]
-    for j in range(len(arcs)):
-        arcs2d.append((arcs[j], j))
-
-
-plt.figure(figsize=(10,10))
-plt.title("Head-modifier pairs scatter plot")
-plt.xlabel("Head index")
-plt.ylabel("Modifier index")
-plt.scatter(*zip(*arcs2d), )
-plt.show()
-
-LSTM_HIDDEN_DIM = 125
-WORD_EMBEDDING_DIM = 200
-POS_EMBEDDING_DIM = 15
 
 class DependencyParsingNetwork(nn.Module):
     def __init__(self, word_vocab_size, pos_vocab_size):
         super(DependencyParsingNetwork, self).__init__()
-        
+
         # EMBEDDING
         self.word_embedding = nn.Embedding(word_vocab_size, WORD_EMBEDDING_DIM, padding_idx=0)
         self.pos_embedding = nn.Embedding(pos_vocab_size, POS_EMBEDDING_DIM)
 
         # LSTM
-        self.lstm = nn.LSTM(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=LSTM_HIDDEN_DIM, num_layers=4,
-                            bidirectional=True, batch_first=True, dropout=0.05)
-        
+        self.lstm = nn.LSTM(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=LSTM_HIDDEN_DIM,
+                            num_layers=2,
+                            bidirectional=True, batch_first=True, dropout=0.1)
+
         # FC
         self.post_seq = nn.Sequential(
             nn.Linear(2 * 2 * LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(LSTM_HIDDEN_DIM, 100),
+            nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(100, 100),
-            nn.Tanh(),
-            nn.Linear(100, 100),
-            nn.Tanh(),
-            nn.Linear(100, 1),
+            nn.Linear(LSTM_HIDDEN_DIM, 1),
         )
 
         self.log_softmax = nn.LogSoftmax(dim=0)
@@ -215,66 +213,58 @@ def test_accuracy(model, test_data, sample_size=50):
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
 
-EPOCHS = 100
-BATCH_SIZE = 50
+EPOCHS = 600
+BATCH_SIZE = 15
 LEARNING_RATE = 0.001
 TEST_SAMPLE_SIZE = 5
 
-if __name__ == "__main__":
-    model_file_name = "trained.model"
-    model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
-    # try:
-    #     model.load_state_dict(torch.load(model_file_name))
-    # except FileNotFoundError:
-    #     print("No saved model state, starting a new model")
+model_file_name = "trained.model"
+model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
 
-    model = model.to(device)
+model = model.to(device)
 
-    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 
-    for epoch in range(EPOCHS):
-        t0 = time()
-        L = 0
-        edges_count = 0
-        correct_edges_count = 0
-        model.zero_grad()
+for epoch in range(EPOCHS):
+    t0 = time()
+    L = 0
+    edges_count = 0
+    correct_edges_count = 0
+    model.zero_grad()
 
-        random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
-        for i in random_batch_idx:
+    random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
+    for i in random_batch_idx:
+        (tokens_vector, pos_vector), arcs = train_dataset[i]
+        tokens_vector = tokens_vector.to(device)
+        pos_vector = pos_vector.to(device)
 
-            (tokens_vector, pos_vector), arcs = train_dataset[i]
-            tokens_vector = tokens_vector.to(device)
-            pos_vector = pos_vector.to(device)
+        # Forward
+        scores, log_softmax_scores = model(tokens_vector, pos_vector)
 
-            # Forward
-            scores, log_softmax_scores = model(tokens_vector, pos_vector)
+        loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
+        loss.backward()
 
-            loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
+        L += loss
 
-            L += loss
+        mst, _ = decode_mst(log_softmax_scores.detach().numpy(), log_softmax_scores.shape[0], has_labels=False)
 
-            # Backpropagation
-            loss.backward()
+        edges_count += log_softmax_scores.shape[0]
+        correct_edges_count += sum(np.equal(mst[1:], arcs[1:]))
 
-            mst, _ = decode_mst(log_softmax_scores.detach().numpy(), log_softmax_scores.shape[0], has_labels=False)
+    #     loss = loss / BATCH_SIZE
+    optimizer.step()
 
-            edges_count += log_softmax_scores.shape[0]
-            correct_edges_count += sum(np.equal(mst[1:], arcs[1:]))
+    # test_acc = test_accuracy(model, test_dataset, TEST_SAMPLE_SIZE)
+    train_acc = correct_edges_count / edges_count
 
-        loss = loss / BATCH_SIZE
-        optimizer.step()
+    print("-------------------------")
+    print("> Epoch = ", epoch + 1, "/", EPOCHS, "took", time() - t0, "seconds")
+    print("> Loss = ", float(L))
+    print("> Train Accuracy = ", float(train_acc))
+    # print("> Test Accuracy = ", float(test_acc) )
 
-        # test_acc = test_accuracy(model, test_dataset, TEST_SAMPLE_SIZE)
-        train_acc = correct_edges_count / edges_count
-        
-        print("-------------------------")
-        print("> Epoch = ", epoch + 1, "/", EPOCHS, "took", time() - t0, "seconds")
-        print("> Loss = ", float(L))
-        print("> Train Accuracy = ", float(train_acc))
-        # print("> Test Accuracy = ", float(test_acc) )
-
-    # Save model to file
-    # saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-    torch.save(model.state_dict(), model_file_name)
+# Save model to file
+# saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
+torch.save(model.state_dict(), model_file_name)
 
 # !cp trained.model drive/MyDrive/

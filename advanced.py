@@ -21,7 +21,7 @@ import numpy as np
 import torchtext
 import torch
 from torch import nn, cuda, tensor, zeros, cat
-from torch.optim import Adam, Adagrad
+from torch.optim import Adam, Adagrad, AdamW
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 from torchtext import vocab
@@ -182,13 +182,15 @@ class DependencyParsingNetwork(nn.Module):
         self.pos_embedding = nn.Embedding(pos_vocab_size, POS_EMBEDDING_DIM, padding_idx=0)
 
         # RNN
-        self.rnn = nn.LSTM(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=HIDDEN_DIM,
-                            num_layers=1,
+        self.rnn = nn.GRU(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=HIDDEN_DIM,
+                            num_layers=2,
                             bidirectional=True, batch_first=True)
 
         # FC
         self.post_seq = nn.Sequential(
             nn.Linear(2*2*HIDDEN_DIM, 2*HIDDEN_DIM),
+            nn.ReLU(),
+            nn.Linear(2*HIDDEN_DIM, 2*HIDDEN_DIM),
             nn.Tanh(),
             nn.Linear(2*HIDDEN_DIM, 1),
         )
@@ -239,7 +241,7 @@ if __name__ == "__main__":
     model = DependencyParsingNetwork(train_dataset.pos_vocab_size, train_dataset.glove)
     model = model.to(device)
 
-    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = AdamW(model.parameters(), lr=LEARNING_RATE)
 
     avg_uas_history = list()
     loss_history = list()

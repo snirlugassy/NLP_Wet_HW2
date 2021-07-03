@@ -25,11 +25,28 @@ from torch.optim import Adam, Adagrad
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 
+import matplotlib.pyplot as plt
+
 from chu_liu_edmonds import decode_mst
+
+from parameters import TRIM_TRAIN_DATASET
+from parameters import HIDDEN_DIM
+from parameters import WORD_EMBEDDING_DIM
+from parameters import POS_EMBEDDING_DIM
+from parameters import EPOCHS
+from parameters import BATCH_SIZE
+from parameters import LEARNING_RATE
+from parameters import TEST_SAMPLE_SIZE
+from parameters import ROOT
+from parameters import OOV
+
 
 train_path = "train.labeled"
 test_path = "test.labeled"
-ROOT = "_R_"
+model_file_name = "trained.model"
+uas_file_name = "uas.npy"
+loss_file_name = "loss.npy"
+
 
 def get_vocab(sentences):
     word_dict = defaultdict(int)
@@ -49,22 +66,22 @@ class ParsingDataset(Dataset):
         self.word_count, self.pos_count = get_vocab(all_sentences)
 
         # Set word id from vocab
-        self.word_idx = dict()
-        self.idx_word = dict()
-        self.words_list = list(self.word_count.keys())
+        self.word_idx = defaultdict(lambda:0)
+        # self.idx_word = dict()
+        self.words_list = [OOV] + list(self.word_count.keys())
         for i in range(len(self.words_list)):
             w = self.words_list[i]
             self.word_idx[w] = i
-            self.idx_word[i] = w
+            # self.idx_word[i] = w
 
         # Set POS id from vocab
-        self.pos_idx = dict()
-        self.idx_pos = dict()
+        self.pos_idx = defaultdict(lambda:0)
+        # self.idx_pos = dict()
         self.pos_list = list(self.pos_count.keys())
         for i in range(len(self.pos_list)):
             pos = self.pos_list[i]
             self.pos_idx[pos] = i
-            self.idx_pos[i] = pos
+            # self.idx_pos[i] = pos
 
         self.word_vocab_size, self.pos_vocab_size = len(self.words_list), len(self.pos_list)
 
@@ -109,8 +126,6 @@ test_sentences = extract_sentences(test_path)
 
 sentences = train_sentences + test_sentences
 
-TRIM_TRAIN_DATASET = 0
-
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], sentences)
 else:
@@ -151,10 +166,6 @@ test_dataset = ParsingDataset(test_sentences, sentences)
 # plt.scatter(*zip(*arcs2d), )
 # plt.show()
 
-LSTM_HIDDEN_DIM = 150
-WORD_EMBEDDING_DIM = 300
-POS_EMBEDDING_DIM = 20
-
 
 class DependencyParsingNetwork(nn.Module):
     def __init__(self, word_vocab_size, pos_vocab_size):
@@ -162,109 +173,134 @@ class DependencyParsingNetwork(nn.Module):
 
         # EMBEDDING
         self.word_embedding = nn.Embedding(word_vocab_size, WORD_EMBEDDING_DIM, padding_idx=0)
-        self.pos_embedding = nn.Embedding(pos_vocab_size, POS_EMBEDDING_DIM)
+        self.pos_embedding = nn.Embedding(pos_vocab_size, POS_EMBEDDING_DIM, padding_idx=0)
 
-        # LSTM
-        self.lstm = nn.LSTM(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=LSTM_HIDDEN_DIM,
+        # RNN
+        self.rnn = nn.GRU(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=HIDDEN_DIM,
                             num_layers=2,
-                            bidirectional=True, batch_first=True, dropout=0.1)
+                            bidirectional=True, batch_first=True, dropout=0.02)
 
         # FC
         self.post_seq = nn.Sequential(
-            nn.Linear(2 * 2 * LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM),
+            nn.Linear(2 * 2 * HIDDEN_DIM, 2*HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM),
+            nn.Linear(2*HIDDEN_DIM, HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(LSTM_HIDDEN_DIM, 1),
+            nn.Linear(HIDDEN_DIM, 1)
         )
 
-        self.log_softmax = nn.LogSoftmax(dim=0)
+        self.softmax = nn.Softmax(dim=0)
 
     def forward(self, token_vector, pos_vector):
         _tokens = self.word_embedding(token_vector).squeeze(0)
         _pos = self.pos_embedding(pos_vector).squeeze(0)
         x = cat((_tokens, _pos), dim=1)
         x = x.unsqueeze(0)
-        x, (hn, cn) = self.lstm(x)
+        x, hn = self.rnn(x)
         x = x.squeeze(0)
         scores = zeros(x.shape[0], x.shape[0])
         for t1, t2 in permutations(range(len(x)), 2):
             scores[t1][t2] = self.post_seq(cat((x[t1], x[t2])))
-        _scores = self.log_softmax(scores)
-        return scores, _scores
+        scores = self.softmax(scores)
+        return scores
 
-def test_accuracy(model, test_data, sample_size=50):
-    edges_count = 0
-    correct_edges_count = 0
-    random_test_idx = torch.randint(len(test_data), (sample_size,))
-    for i in random_test_idx:
-        (tokens_vector, pos_vector), arcs = test_data[i]
-        tokens_vector = tokens_vector.to(device)
-        pos_vector = pos_vector.to(device)
-        arc = arcs.to(device)
-        scores, log_softmax_scores = model(tokens_vector, pos_vector)
-        mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
-        edges_count += scores.shape[0]
-        correct_edges_count += sum(np.equal(mst, arcs))
-    accuracy = correct_edges_count / edges_count
-    return accuracy
+def test_accuracy(model, test_data, sample_size=10):
+    with torch.no_grad():
+        edges_count = 0
+        correct_edges_count = 0
+        random_test_idx = torch.randint(len(test_data), (sample_size,))
+        for i in random_test_idx:
+            (tokens_vector, pos_vector), arcs = test_data[i]
+            tokens_vector = tokens_vector.to(device)
+            pos_vector = pos_vector.to(device)
+            arc = arcs.to(device)
+            scores = model(tokens_vector, pos_vector)
+            mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+            edges_count += scores.shape[0]
+            correct_edges_count += sum(np.equal(mst, arcs))
+        accuracy = correct_edges_count / edges_count
+        return accuracy
 
 
-device = 'cuda' if cuda.is_available() else 'cpu'
-print("Device = ", device)
+if __name__ == "__main__":
+    device = 'cuda' if cuda.is_available() else 'cpu'
+    print("Device = ", device)
 
-EPOCHS = 600
-BATCH_SIZE = 15
-LEARNING_RATE = 0.001
-TEST_SAMPLE_SIZE = 5
+    model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
+    model = model.to(device)
 
-model_file_name = "trained.model"
-model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 
-model = model.to(device)
+    avg_uas_history = list()
+    loss_history = list()
 
-optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+    for epoch in range(EPOCHS):
+        t0 = time()
+        L = 0
+        edges_count = 0
+        correct_edges_count = 0
+        model.zero_grad()
+        uas = list()
+        random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
+        for i in random_batch_idx:
+            (tokens_vector, pos_vector), arcs = train_dataset[i]
+            tokens_vector = tokens_vector.to(device)
+            pos_vector = pos_vector.to(device)
 
-for epoch in range(EPOCHS):
-    t0 = time()
-    L = 0
-    edges_count = 0
-    correct_edges_count = 0
-    model.zero_grad()
+            # Forward
+            scores = model(tokens_vector, pos_vector)
 
-    random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
-    for i in random_batch_idx:
-        (tokens_vector, pos_vector), arcs = train_dataset[i]
-        tokens_vector = tokens_vector.to(device)
-        pos_vector = pos_vector.to(device)
+            log_softmax_scores = F.log_softmax(scores, dim=0)
+            loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))]))
+            # loss = loss_function(log_softmax_scores[1:, :], arcs[1:])
+            loss.backward()
 
-        # Forward
-        scores, log_softmax_scores = model(tokens_vector, pos_vector)
+            # # loss = loss_function(softmax_scores, )
+            # loss.backward()
 
-        loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
-        loss.backward()
+            L += loss
 
-        L += loss
+            mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+            #
+            # edges_count += scores.shape[0]
+            uas.append(sum(np.equal(mst[1:], arcs[1:])) / (len(arcs) - 1))
 
-        mst, _ = decode_mst(log_softmax_scores.detach().numpy(), log_softmax_scores.shape[0], has_labels=False)
+        for param in model.parameters():
+            param = param / BATCH_SIZE
 
-        edges_count += log_softmax_scores.shape[0]
-        correct_edges_count += sum(np.equal(mst[1:], arcs[1:]))
+        optimizer.step()
 
-    #     loss = loss / BATCH_SIZE
-    optimizer.step()
+        test_acc = test_accuracy(model, test_dataset, TEST_SAMPLE_SIZE)
+        uas = np.mean(uas)
 
-    # test_acc = test_accuracy(model, test_dataset, TEST_SAMPLE_SIZE)
-    train_acc = correct_edges_count / edges_count
+        avg_uas_history.append(float(uas))
+        loss_history.append(float(L))
 
-    print("-------------------------")
-    print("> Epoch = ", epoch + 1, "/", EPOCHS, "took", time() - t0, "seconds")
-    print("> Loss = ", float(L))
-    print("> Train Accuracy = ", float(train_acc))
-    # print("> Test Accuracy = ", float(test_acc) )
+        print("-------------------------")
+        print("> Epoch = ", epoch + 1, "/", EPOCHS, "took", time() - t0, "seconds")
+        print("> Loss = ", float(L))
+        print("> Train Accuracy = ", float(uas))
+        print("> Test Accuracy = ", float(test_acc) )
 
-# Save model to file
-# saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-torch.save(model.state_dict(), model_file_name)
+    # Save results
+    plt.gcf()
+    _x = range(1,len(loss_history)+1)
+    plt.plot(_x, loss_history)
+    plt.xticks(_x)
+    plt.title("Loss per epoch")
+    plt.xlabel("epoch")
+    plt.ylabel("loss")
+    plt.savefig("loss.png")
 
-# !cp trained.model drive/MyDrive/
+    plt.gcf()
+    _x = range(1, len(avg_uas_history) + 1)
+    plt.plot(_x, avg_uas_history)
+    plt.xticks(_x)
+    plt.title("UAS average per epoch")
+    plt.xlabel("epoch")
+    plt.ylabel("UAS")
+    plt.savefig("uas.png")
+
+    np.save(uas_file_name, avg_uas_history)
+    np.save(loss_file_name, loss_history)
+    torch.save(model.state_dict(), model_file_name)

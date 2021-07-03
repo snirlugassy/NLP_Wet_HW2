@@ -19,6 +19,7 @@ from collections import defaultdict, OrderedDict
 from itertools import combinations
 from chu_liu_edmonds import decode_mst
 from datetime import datetime
+from time import time
 
 from send_email import send_email
 
@@ -85,6 +86,7 @@ class ParsingDataset(Dataset):
         # arcs = [(int(s[i][2]), i) for i in range(len(s))]
         arcs = [int(s[i][2]) for i in range(len(s))]
         return (tokens_vector, pos_vector), tensor(arcs)
+
 
 def extract_sentences(file_path):
     sentences = []
@@ -176,17 +178,21 @@ def vectorize_pos(pos, to_idx):
 HIDDEN_DIM = 250
 WORD_EMBEDDING_DIM = 500
 EPOCHS = 1000
-GRAD_STEPS = 5
+GRAD_STEPS = 3
 TRIM_TRAIN_DATASET = 0
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 LEARNING_RATE = 0.005
 
+# Trainig Data
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET])
 else:
     train_dataset = ParsingDataset(train_sentences)
 
 data_loader = DataLoader(train_dataset, batch_size=100, shuffle=True)
+
+# Testing Data
+test_dataset = ParsingDataset(test_sentences)
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print("Device = ", device)
@@ -198,6 +204,25 @@ model = model.to(device)
 optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 loss_function = nn.NLLLoss()
 log_softmax = nn.LogSoftmax(dim=1)
+
+
+def test_accuracy(model):
+    t0 = time()
+    edges_count = 0
+    correct_edges_count = 0
+    random_test_idx = torch.randint(len(test_dataset), (50,))
+    for i in random_test_idx:
+        (tokens_vector, pos_vector), arcs = train_dataset[i]
+        tokens_vector = tokens_vector.to(device)
+        pos_vector = pos_vector.to(device)
+        arc = arcs.to(device)
+        scores, log_softmax_scores = model(tokens_vector, pos_vector)
+        mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+        edges_count += scores.shape[0]
+        correct_edges_count += sum(np.equal(mst, arcs))
+    accuracy = correct_edges_count / edges_count
+    print("accuracy took ", time() - t0, "seconds")
+    return accuracy
 
 
 if __name__ == "__main__":
@@ -229,12 +254,13 @@ if __name__ == "__main__":
                 optimizer.step()
                 model.zero_grad()
 
-            mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+            # mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+            #
+            # edges_count += scores.shape[0]
+            # correct_edges_count += sum(np.equal(mst, arcs))
 
-            edges_count += scores.shape[0]
-            correct_edges_count += sum(np.equal(mst, arcs))
-
-        accuracy = correct_edges_count / edges_count
+        accuracy = test_accuracy(model)
+        # accuracy = correct_edges_count / edges_count
 
         print("Epoch = ", epoch, "/", EPOCHS)
         print("Loss = ", L)

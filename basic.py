@@ -14,7 +14,7 @@ import torch.nn.functional as F
 import numpy as np
 import torchtext
 from collections import defaultdict, OrderedDict
-from itertools import combinations
+from itertools import permutations
 from chu_liu_edmonds import decode_mst
 from datetime import datetime
 # from send_email import send_email
@@ -116,8 +116,9 @@ class DependencyParsingNetwork(nn.Module):
         # TODO: add dropout arg to lstm
         self.lstm = nn.LSTM(input_size=word_embedding_dim + pos_embedding_dim, hidden_size=hidden_dim, num_layers=2, bidirectional=True, batch_first=True)
         self.mlp = nn.Sequential(
-            nn.Linear(2 * 2 * HIDDEN_DIM, 1),
+            nn.Linear(2 * 2 * HIDDEN_DIM, 100),
             nn.Tanh(),
+            nn.Linear(100, 1),
         )
         self.log_softmax = nn.LogSoftmax(dim=0)
 
@@ -130,21 +131,11 @@ class DependencyParsingNetwork(nn.Module):
         x, (hn, cn) = self.lstm(x)
         x = x.squeeze(0)
         scores = zeros(x.shape[0], x.shape[0])
-        for _i, _j in combinations(range(len(x)), 2):
-            scores[_i][_j] = self.mlp(cat((x[_i],x[_j])))
+        for t1, t2 in permutations(range(len(x)), 2):
+            scores[t1][t2] = self.mlp(cat((x[t1],x[t2])))
         _scores = self.log_softmax(scores)
         return scores, _scores
 
-# def vectorize_tokens(tokens, to_idx):
-#     idxs = [to_idx[w] for w in tokens]
-#     return tensor([idxs])
-
-
-# def vectorize_pos(pos, to_idx):
-#     pos_vector = zeros((len(pos), len(to_idx.keys())), dtype=int)
-#     for i in range(len(pos)):
-#         pos_vector[(i, to_idx[pos[i]])] = 1
-#     return pos_vector
 
 TRIM_TRAIN_DATASET = 50
 
@@ -160,8 +151,8 @@ HIDDEN_DIM = 125
 WORD_EMBEDDING_DIM = 200
 POS_EMBEDDING_DIM = 20
 EPOCHS = 200
-GRAD_STEPS = 3
-BATCH_SIZE = 10
+# GRAD_STEPS = 3
+BATCH_SIZE = 20
 LEARNING_RATE = 1e-3
 
 
@@ -176,28 +167,28 @@ if __name__ == "__main__":
     
     model = model.to(device)
 
-    optimizer = Adagrad(model.parameters(), lr=LEARNING_RATE)
-    # loss_function = nn.NLLLoss()
-    # log_softmax = nn.LogSoftmax(dim=0)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+
 
     for epoch in range(EPOCHS):
         L = 0
         edges_count = 0
         correct_edges_count = 0
         random_batch_idx = torch.randint(len(train_dataset), (BATCH_SIZE,))
-        _i = -1
+
         for i in random_batch_idx:
-            _i += 1
+            model.zero_grad()
+
             (tokens_vector, pos_vector), arcs = train_dataset[i]
             tokens_vector = tokens_vector.to(device)
             pos_vector = pos_vector.to(device)
-            arc = arcs.to(device)
+            arcs = arcs.to(device)
 
             # Forward
             scores, log_softmax_scores = model(tokens_vector, pos_vector)
 
             # loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))]))
-            loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))]))
+            loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
             # loss = -torch.sum(torch.stack([scores[arcs[j]][j] for j in range(len(arcs))])) / len(arcs)
             # loss = loss_function(scores, arcs)
 
@@ -206,15 +197,22 @@ if __name__ == "__main__":
             # Backpropagation
             loss.backward()
 
-            if _i % GRAD_STEPS == 0: 
-                # loss = loss / GRAD_STEPS
-                optimizer.step()
-                model.zero_grad()
+            # if count == GRAD_STEPS:
+            #     count = 0
+            #     print("step")
+            #     # loss = loss / GRAD_STEPS
+            #     optimizer.step()
+            #     model.zero_grad()
 
             mst, _ = decode_mst(log_softmax_scores.detach().numpy(), log_softmax_scores.shape[0], has_labels=False)
 
             edges_count += log_softmax_scores.shape[0]
             correct_edges_count += sum(np.equal(mst[1:], arcs[1:]))
+
+
+        # loss = loss / BATCH_SIZE
+
+        optimizer.step()
 
         accuracy = correct_edges_count / edges_count
 
@@ -224,4 +222,5 @@ if __name__ == "__main__":
 
     # Save model to file
     saved_model_file_name = datetime.now().strftime("%y-%m-%d_%H-%M") + ".model"
-    torch.save(model.state_dict(), saved_model_file_name)
+    # torch.save(model.state_dict(), saved_model_file_name)
+    torch.save(model.state_dict(), model_file_name)

@@ -24,6 +24,7 @@ from torch import nn, cuda, tensor, zeros, cat
 from torch.optim import Adam, Adagrad
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
+from torchtext import vocab
 
 import matplotlib.pyplot as plt
 
@@ -62,28 +63,31 @@ def get_vocab(sentences):
 class ParsingDataset(Dataset):
     def __init__(self, train_sentences, all_sentences):
         self.sentences = train_sentences
+        self.glove = vocab.GloVe("42B")
+        self.word_embedding_dim = self.glove.dim
+        self.word_idx = defaultdict(lambda:0, self.glove.stoi)
+        _, self.pos_count = get_vocab(all_sentences)
 
-        self.word_count, self.pos_count = get_vocab(all_sentences)
-
-        # Set word id from vocab
-        self.word_idx = defaultdict(lambda:0)
-        # self.idx_word = dict()
-        self.words_list = [OOV] + list(self.word_count.keys())
-        for i in range(len(self.words_list)):
-            w = self.words_list[i]
-            self.word_idx[w] = i
-            # self.idx_word[i] = w
-
-        # Set POS id from vocab
+        # # Set word id from vocab
+        # self.word_idx = defaultdict(lambda:0)
+        # # self.idx_word = dict()
+        # self.words_list = [OOV] + list(self.word_count.keys())
+        # for i in range(len(self.words_list)):
+        #     w = self.words_list[i]
+        #     self.word_idx[w] = i
+        #     # self.idx_word[i] = w
+        #
+        # # Set POS id from vocab
         self.pos_idx = defaultdict(lambda:0)
-        # self.idx_pos = dict()
+        # # self.idx_pos = dict()
         self.pos_list = list(self.pos_count.keys())
         for i in range(len(self.pos_list)):
             pos = self.pos_list[i]
             self.pos_idx[pos] = i
             # self.idx_pos[i] = pos
 
-        self.word_vocab_size, self.pos_vocab_size = len(self.words_list), len(self.pos_list)
+        # self.word_vocab_size, self.pos_vocab_size = len(self.words_list), len(self.pos_list)
+        self.pos_vocab_size = len(self.pos_list)
 
     def vectorize_tokens(self, tokens):
         idxs = [self.word_idx[w] for w in tokens]
@@ -125,6 +129,7 @@ train_sentences = extract_sentences(train_path)
 test_sentences = extract_sentences(test_path)
 
 sentences = train_sentences + test_sentences
+
 
 if TRIM_TRAIN_DATASET > 0:
     train_dataset = ParsingDataset(train_sentences[:TRIM_TRAIN_DATASET], sentences)
@@ -168,25 +173,24 @@ test_dataset = ParsingDataset(test_sentences, sentences)
 
 
 class DependencyParsingNetwork(nn.Module):
-    def __init__(self, word_vocab_size, pos_vocab_size):
+    def __init__(self, pos_vocab_size, glove):
         super(DependencyParsingNetwork, self).__init__()
 
         # EMBEDDING
-        self.word_embedding = nn.Embedding(word_vocab_size, WORD_EMBEDDING_DIM, padding_idx=0)
+        self.word_embedding = nn.Embedding.from_pretrained(glove.vectors)
+        # self.word_embedding = nn.Embedding(word_vocab_size, WORD_EMBEDDING_DIM, padding_idx=0)
         self.pos_embedding = nn.Embedding(pos_vocab_size, POS_EMBEDDING_DIM, padding_idx=0)
 
         # RNN
-        self.rnn = nn.GRU(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=HIDDEN_DIM,
-                            num_layers=2,
-                            bidirectional=True, batch_first=True, dropout=0.02)
+        self.rnn = nn.LSTM(input_size=WORD_EMBEDDING_DIM + POS_EMBEDDING_DIM, hidden_size=HIDDEN_DIM,
+                            num_layers=1,
+                            bidirectional=True, batch_first=True)
 
         # FC
         self.post_seq = nn.Sequential(
-            nn.Linear(2 * 2 * HIDDEN_DIM, 2*HIDDEN_DIM),
+            nn.Linear(2*2*HIDDEN_DIM, 2*HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(2*HIDDEN_DIM, HIDDEN_DIM),
-            nn.Tanh(),
-            nn.Linear(HIDDEN_DIM, 1)
+            nn.Linear(2*HIDDEN_DIM, 1),
         )
 
         self.softmax = nn.Softmax(dim=0)
@@ -223,16 +227,25 @@ def test_accuracy(model, test_data, sample_size=10):
 
 
 if __name__ == "__main__":
+
+
     device = 'cuda' if cuda.is_available() else 'cpu'
     print("Device = ", device)
 
-    model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
+    # glove = Vocab(train_dataset.word_count)
+    # word_embeddings = glove.stoi, glove.itos, glove.vectors
+
+    # glove = vocab.GloVe("42B", dim=WORD_EMBEDDING_DIM)
+    model = DependencyParsingNetwork(train_dataset.pos_vocab_size, train_dataset.glove)
     model = model.to(device)
 
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 
     avg_uas_history = list()
     loss_history = list()
+
+    arcs_count = 0
+    correct_predictions = 0
 
     for epoch in range(EPOCHS):
         t0 = time()
@@ -263,7 +276,9 @@ if __name__ == "__main__":
             mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
             #
             # edges_count += scores.shape[0]
-            uas.append(sum(np.equal(mst[1:], arcs[1:])) / (len(arcs) - 1))
+            # uas.append(sum(np.equal(mst[1:], arcs[1:])) / (len(arcs) - 1))
+            arcs_count += len(arcs) - 1
+            correct_predictions += sum(np.equal(mst[1:], arcs[1:]))
 
         for param in model.parameters():
             param = param / BATCH_SIZE
@@ -271,7 +286,7 @@ if __name__ == "__main__":
         optimizer.step()
 
         test_acc = test_accuracy(model, test_dataset, TEST_SAMPLE_SIZE)
-        uas = np.mean(uas)
+        uas = correct_predictions / arcs_count
 
         avg_uas_history.append(float(uas))
         loss_history.append(float(L))
@@ -295,7 +310,6 @@ if __name__ == "__main__":
     plt.gcf()
     _x = range(1, len(avg_uas_history) + 1)
     plt.plot(_x, avg_uas_history)
-    plt.xticks(_x)
     plt.title("UAS average per epoch")
     plt.xlabel("epoch")
     plt.ylabel("UAS")

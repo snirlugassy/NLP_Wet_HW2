@@ -33,11 +33,15 @@ if __name__ == "__main__":
     sentences = extract_sentences(comp_data_path)
     device = 'cuda' if cuda.is_available() else 'cpu'
     print("Device = ", device)
-    model = DependencyParsingNetwork(train_dataset.word_vocab_size, train_dataset.pos_vocab_size)
+    model = DependencyParsingNetwork(train_dataset.pos_vocab_size, train_dataset.glove)
     model = model.to(device)
     model.load_state_dict(torch.load(model_file_name))
     lines = list()
+    i = 0
+    n = len(sentences)
     for sentence in sentences:
+        i += 1
+        print("Sentence {} / {}".format(i, n))
         tokens_vector = train_dataset.vectorize_tokens([w[0] for w in sentence])
         pos_vector = train_dataset.vectorize_pos([w[1] for w in sentence])
         scores = model(tokens_vector, pos_vector)

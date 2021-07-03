@@ -188,11 +188,11 @@ class DependencyParsingNetwork(nn.Module):
 
         # FC
         self.post_seq = nn.Sequential(
-            nn.Linear(2*2*HIDDEN_DIM, 2*HIDDEN_DIM),
-            nn.ReLU(),
-            nn.Linear(2*HIDDEN_DIM, 2*HIDDEN_DIM),
+            nn.Linear(2*2*HIDDEN_DIM, HIDDEN_DIM),
             nn.Tanh(),
-            nn.Linear(2*HIDDEN_DIM, 1),
+            nn.Linear(HIDDEN_DIM, 20),
+            nn.ReLU(),
+            nn.Linear(20, 1),
         )
 
         self.softmax = nn.Softmax(dim=0)
@@ -267,20 +267,15 @@ if __name__ == "__main__":
 
             log_softmax_scores = F.log_softmax(scores, dim=0)
             loss = -torch.sum(torch.stack([log_softmax_scores[arcs[j]][j] for j in range(len(arcs))]))
-            # loss = loss_function(log_softmax_scores[1:, :], arcs[1:])
-            loss.backward()
-
-            # # loss = loss_function(softmax_scores, )
-            # loss.backward()
-
             L += loss
 
             mst, _ = decode_mst(scores.detach().numpy(), scores.shape[0], has_labels=False)
+            arcs_count += len(arcs) - 1
+            correct_predictions += sum(np.equal(mst[1:], arcs[1:]))
+            loss.backward()
             #
             # edges_count += scores.shape[0]
             # uas.append(sum(np.equal(mst[1:], arcs[1:])) / (len(arcs) - 1))
-            arcs_count += len(arcs) - 1
-            correct_predictions += sum(np.equal(mst[1:], arcs[1:]))
 
         for param in model.parameters():
             param = param / BATCH_SIZE
